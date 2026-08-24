@@ -1,0 +1,22 @@
+[project]
+name = "paper2vid"
+version = "0.1.0"
+description = "Paste an arXiv link, get a narrated video. Bring your own key."
+requires-python = ">=3.10"
+dependencies = [
+  "requests>=2.31",
+  "beautifulsoup4>=4.12",
+  "lxml>=5.0",
+  "resvg-py>=0.4",
+  "pillow>=10.0",
+]
+
+[project.optional-dependencies]
+local-tts = ["kokoro-onnx>=0.4", "soundfile>=0.12"]
+
+[project.scripts]
+paper2vid = "paper2vid.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
