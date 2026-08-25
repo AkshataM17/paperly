@@ -130,15 +130,22 @@ def _library() -> list[dict]:
 
 INDEX = r"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>paper2vid</title><style>
+<title>Paperly</title><style>
 *{box-sizing:border-box}
 body{margin:0;background:%(paper)s;color:%(ink)s;font-family:%(display)s;
      -webkit-font-smoothing:antialiased}
-.wrap{max-width:900px;margin:0 auto;padding:120px 28px 120px}
+.wrap{max-width:900px;margin:0 auto;padding:0 28px 120px}
+.nav{border-bottom:1px solid %(rule)s;padding:17px 28px;margin-bottom:76px}
+.nav .inner{max-width:900px;margin:0 auto}
+.mark{font-family:%(display)s;font-size:20px;font-weight:680;
+      letter-spacing:-.03em;color:%(ink)s;display:inline-block}
+.mark b{color:%(signal)s;font-weight:680}
 .eyebrow{font-family:%(mono)s;font-size:11px;letter-spacing:.18em;
          text-transform:uppercase;color:%(graphite)s;margin:0 0 18px}
+.sub{font-size:17px;color:%(graphite)s;line-height:1.55;max-width:44ch;
+     margin:0 0 30px}
 h1{font-size:clamp(40px,6.5vw,72px);font-weight:650;letter-spacing:-.035em;
-   margin:0 0 34px;line-height:1}
+   margin:0 0 14px;line-height:1}
 h1 em{font-style:normal;color:%(signal)s}
 .sub{font-size:19px;color:%(graphite)s;margin:0 0 40px;max-width:46ch;
      line-height:1.55}
@@ -206,10 +213,11 @@ h2{font-size:11px;font-family:%(mono)s;letter-spacing:.18em;text-transform:upper
 .wait form{display:flex;gap:9px;flex-wrap:wrap;margin:0}
 .wait .ok{font-family:%(mono)s;font-size:12px;letter-spacing:.1em;
           text-transform:uppercase;color:%(signal)s}
-</style></head><body><div class="wrap">
+</style></head><body><div class="nav"><div class="inner"><span class="mark">Paperly<b>.</b></span></div></div>
 
-<p class="eyebrow">arXiv, marked up</p>
+<div class="wrap">
 <h1>Paste a paper.</h1>
+<p class="sub">Paste any arXiv paper link and get it explained</p>
 
 <form id="f">
   <input id="u" placeholder="https://arxiv.org/abs/2503.01234" autofocus
@@ -373,7 +381,7 @@ library();
 
 LOGIN = """<!DOCTYPE html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>paper2vid</title><style>
+<title>Paperly</title><style>
 body{margin:0;background:%(paper)s;color:%(ink)s;font-family:%(display)s;
      display:flex;align-items:center;justify-content:center;height:100vh}
 form{display:flex;gap:10px;flex-wrap:wrap;max-width:420px;padding:0 24px}
