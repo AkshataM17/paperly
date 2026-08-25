@@ -393,3 +393,61 @@ def place_annotations(sb, doc, log=None, model=None, **llm_kw) -> int:
 
     with ThreadPoolExecutor(max_workers=min(6, len(tasks))) as pool:
         return sum(pool.map(place, tasks))
+
+
+# --- pre-baked answers -------------------------------------------------------
+
+PREBAKE_SYSTEM = """You are answering the obvious follow-up questions about one
+part of a paper, for a reader outside the field. Answer only from the context
+given. If it does not contain the answer, say so plainly rather than guessing --
+never invent numbers, results or comparisons."""
+
+PREBAKE_PROMPT = """PAPER CONTEXT:
+{digest}
+
+For EACH scene below, write three short answers (2-3 sentences each, plain
+words, no jargon you have not expanded):
+  "matters" - why this part matters
+  "simpler" - the same point again, simpler
+  "deeper"  - the technical detail behind it
+
+SCENES:
+{scenes}
+
+Return ONLY:
+{{"answers": {{"s1": {{"matters": "...", "simpler": "...", "deeper": "..."}}}}}}"""
+
+
+def prebake_answers(sb, digest: str, log=None, **llm_kw) -> int:
+    """Answer the canned buttons once, at build time.
+
+    Those three buttons ask the same thing on every visit, so paying for them
+    per reader is paying repeatedly for an identical answer. Generated here
+    they cost a few cents once, then they are instant and free forever -- which
+    also means a hosted page can be fully interactive without a key.
+
+    Free-text questions still go to the model live; there is no way to
+    anticipate those.
+    """
+    scenes = "\n".join(
+        f'  {s.id}: {s.narration}'
+        + (f' [figure: {s.visual.get("ref")}]' if s.visual.get("kind") == "figure" else "")
+        for s in sb.scenes)
+    try:
+        data = llm.complete_json(
+            PREBAKE_PROMPT.format(digest=digest[:20000], scenes=scenes),
+            PREBAKE_SYSTEM, max_tokens=8000, **llm_kw)
+    except llm.LLMError as e:
+        if log:
+            log(f"note: could not pre-bake answers ({e}); buttons will ask live")
+        return 0
+
+    n = 0
+    answers = data.get("answers", {})
+    for s in sb.scenes:
+        a = answers.get(s.id)
+        if isinstance(a, dict) and a.get("matters"):
+            s.visual["prebaked"] = {k: str(a.get(k, ""))[:1200]
+                                    for k in ("matters", "simpler", "deeper")}
+            n += 1
+    return n

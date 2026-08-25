@@ -99,6 +99,20 @@ def main() -> int:
     warns = storyboard._validate(sb, {f.ref for f in doc.figures})
     assert not warns, warns
 
+    from paper2vid import web
+    page = web.build(sb, doc, digest, os.path.join(work, "page.html"))
+    html = open(page, encoding="utf-8").read()
+    assert "data:image/png;base64" in html, "figure not inlined"
+    assert "__SCENES__" in html and "__CONTEXT__" in html
+    assert ".keybar[hidden]" in html, "key bar would show even when served"
+    print(f"web OK: {page} ({os.path.getsize(page)/1e6:.2f} MB, "
+          f"{len(sb.scenes)} scenes, self-contained)")
+
+    import shutil as _sh
+    if not _sh.which("ffmpeg"):
+        print("video skipped: ffmpeg not installed")
+        return 0
+
     scene_files = []
     for sc in sb.scenes:
         audio, dur = tts.speak(sc.narration, os.path.join(work, "audio", sc.id + ".wav"), os.environ.get("P2V_TTS", "none"))

@@ -12,19 +12,23 @@ localhost; it is deliberately not hardened for anything else.
 
 from __future__ import annotations
 
+import hashlib
 import html as htmllib
 import json
 import os
+import re
 import threading
 import traceback
+import urllib.parse
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import ingest, llm, storyboard, web
+from . import ingest, limits as limits_mod, llm, storyboard, web
 from .style import TOKENS, FONT_DISPLAY, FONT_MONO
 
 JOBS: dict[str, dict] = {}
 CFG: dict = {}
+LIMITS = None
 
 
 # --- the pipeline, as a background job ---------------------------------------
@@ -80,6 +84,12 @@ def _run_job(job_id: str, paper: str) -> None:
                            if CFG["llm"] == "anthropic" else CFG["model"]))
                 if dropped:
                     log(f"dropped {dropped} markers that did not match")
+            n = storyboard.prebake_answers(
+                sb, ingest.condense(doc), log=log, provider=CFG["llm"],
+                model=(CFG.get("place_model")
+                       if CFG["llm"] == "anthropic" else CFG["model"]))
+            if n:
+                log(f"pre-answered the buttons on {n} scenes")
             with open(sb_path, "w") as f:
                 f.write(sb.to_json())
 
@@ -187,6 +197,15 @@ h2{font-size:11px;font-family:%(mono)s;letter-spacing:.18em;text-transform:upper
 .lib .m{font-family:%(mono)s;font-size:11px;color:%(graphite)s;
         letter-spacing:.08em;margin-top:6px}
 .empty{color:%(graphite)s;font-size:15px;padding:20px 0}
+.wait{display:none;margin-top:34px;border:1px solid %(signal)s;background:#fff;
+      padding:26px 28px}
+.wait.on{display:block}
+.wait h3{font-size:22px;font-weight:640;letter-spacing:-.02em;margin:0 0 10px}
+.wait p{font-size:16px;color:%(graphite)s;line-height:1.55;margin:0 0 20px;
+        max-width:52ch}
+.wait form{display:flex;gap:9px;flex-wrap:wrap;margin:0}
+.wait .ok{font-family:%(mono)s;font-size:12px;letter-spacing:.1em;
+          text-transform:uppercase;color:%(signal)s}
 </style></head><body><div class="wrap">
 
 <p class="eyebrow">arXiv, marked up</p>
@@ -204,6 +223,16 @@ h2{font-size:11px;font-family:%(mono)s;letter-spacing:.18em;text-transform:upper
     <span class="clock" id="clock">0:00</span>
   </div>
   <div class="steps" id="steps"></div>
+</div>
+
+<div class="wait" id="wait">
+  <h3 id="waith">That was your free paper.</h3>
+  <p id="waitp">Join the waitlist for unlimited access &mdash; or run it
+  yourself, it is open source and works on your own key.</p>
+  <form id="wf">
+    <input id="we" type="email" placeholder="you@university.edu" required>
+    <button type="submit">Join waitlist</button>
+  </form>
 </div>
 
 <h2 id="libh" hidden>Built already</h2>
@@ -249,8 +278,7 @@ async function library() {
     a.href = '/p/' + it.arxiv_id;
     a.innerHTML = '<div class="t"></div><div class="m"></div>';
     a.querySelector('.t').textContent = it.title;
-    a.querySelector('.m').textContent =
-      'arXiv:' + it.arxiv_id + '  \u00b7  ' + it.scenes + ' scenes';
+    a.querySelector('.m').textContent = 'arXiv:' + it.arxiv_id;
     lib.appendChild(a);
   });
 }
@@ -268,6 +296,29 @@ function stop(msg) {
   $('#go').disabled = false;
   clearInterval(tick);
 }
+
+function showWaitlist(msg) {
+  if (msg) $('#waitp').textContent = msg;
+  $('#wait').className = 'wait on';
+  $('#wait').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+$('#wf').onsubmit = async (e) => {
+  e.preventDefault();
+  const email = $('#we').value.trim();
+  if (!email) return;
+  try {
+    const r = await fetch('/api/waitlist', { method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email }) });
+    const d = await r.json();
+    $('#wf').innerHTML = d.ok
+      ? '<span class="ok">You are on the list. Thank you.</span>'
+      : '<span class="ok">That address did not look right.</span>';
+  } catch (err) {
+    $('#wf').innerHTML = '<span class="ok">Could not reach the server.</span>';
+  }
+};
 
 $('#f').onsubmit = async (e) => {
   e.preventDefault();
@@ -289,6 +340,14 @@ $('#f').onsubmit = async (e) => {
     const r = await fetch('/api/build', { method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ paper: url }) });
+    if (r.status === 402) {
+      const d = await r.json();
+      $('#run').className = 'run';
+      $('#go').disabled = false;
+      clearInterval(tick);
+      showWaitlist(d.message);
+      return;
+    }
     const { job } = await r.json();
     const poll = setInterval(async () => {
       const s = await (await fetch('/api/status/' + job)).json();
@@ -312,21 +371,117 @@ library();
 </script></body></html>""" % {**TOKENS, "display": FONT_DISPLAY, "mono": FONT_MONO}
 
 
+LOGIN = """<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>paper2vid</title><style>
+body{margin:0;background:%(paper)s;color:%(ink)s;font-family:%(display)s;
+     display:flex;align-items:center;justify-content:center;height:100vh}
+form{display:flex;gap:10px;flex-wrap:wrap;max-width:420px;padding:0 24px}
+input{font-size:17px;padding:15px 17px;border:2px solid %(ink)s;background:#fff;
+      color:%(ink)s;flex:1;min-width:200px;font-family:%(display)s}
+input:focus{outline:none;border-color:%(signal)s}
+button{font-family:%(mono)s;font-size:12px;letter-spacing:.14em;
+       text-transform:uppercase;background:%(ink)s;color:%(paper)s;
+       border:2px solid %(ink)s;padding:15px 26px;cursor:pointer}
+</style></head><body>
+<form method="post" action="/login">
+  <input type="password" name="pw" placeholder="Passphrase" autofocus>
+  <button type="submit">Enter</button>
+</form></body></html>""" % {**TOKENS, "display": FONT_DISPLAY, "mono": FONT_MONO}
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):          # keep the console for pipeline output
         pass
 
+    def _visitor(self) -> tuple[str, bool]:
+        """Return (visitor id, is_new). Identity is a cookie -- good enough to
+        stop casual repeat use, not an identity system."""
+        cookie = self.headers.get("Cookie", "")
+        for part in cookie.split(";"):
+            k, _, v = part.strip().partition("=")
+            if k == "p2vid" and v:
+                return v, False
+        return LIMITS.new_visitor() if LIMITS else "anon", True
+
+    def _authed(self) -> bool:
+        """A deployed instance spends the owner's key on every build, so it
+        cannot be left open. Locally there is no passphrase and no gate."""
+        pw = CFG.get("password")
+        if not pw:
+            return True
+        # Cookies do not travel cross-origin by default, so an API client
+        # authenticates with a bearer token instead. Same secret either way.
+        auth = self.headers.get("Authorization", "")
+        if auth.startswith("Bearer ") and auth[7:].strip() == pw:
+            return True
+        cookie = self.headers.get("Cookie", "")
+        return f"p2v={hashlib.sha256(pw.encode()).hexdigest()[:32]}" in cookie
+
+    def _deny(self):
+        self._send(401, LOGIN)
+
+    def _gate(self, vid: str, kind: str):
+        """None if allowed, else the JSON body to return."""
+        if not LIMITS:
+            return None
+        ok, why = LIMITS.check(vid, kind)
+        if ok:
+            return None
+        return json.dumps({
+            "error": "limit",
+            "reason": why,
+            "waitlist": True,
+            "message": ("The free preview is out of capacity for now."
+                        if why == "budget" else
+                        "That is your free " + kind + ". Join the waitlist for "
+                        "unlimited access, or run it yourself -- it is open "
+                        "source and works on your own key."),
+        })
+
+    def _cors(self):
+        """A frontend served from another domain -- Lovable, Vercel, localhost
+        during development -- is a different origin, so the browser will not
+        let it read these responses without permission. Set
+        PAPER2VID_CORS_ORIGIN to that domain to grant it."""
+        origin = CFG.get("cors")
+        if not origin:
+            return
+        self.send_header("Access-Control-Allow-Origin", origin)
+        self.send_header("Access-Control-Allow-Headers", "content-type, authorization")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+
     def _send(self, code, body, ctype="text/html; charset=utf-8"):
         data = body.encode("utf-8") if isinstance(body, str) else body
         self.send_response(code)
+        self._cors()
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
 
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self._cors()
+        self.end_headers()
+
     def do_GET(self):
         path = self.path.split("?")[0]
+        if not self._authed():
+            return self._deny()
         if path == "/":
+            vid, is_new = self._visitor()
+            if is_new and LIMITS:
+                data = INDEX.encode("utf-8")
+                self.send_response(200)
+                self._cors()
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Set-Cookie",
+                                 f"p2vid={vid}; Path=/; Max-Age=31536000; "
+                                 f"SameSite=Lax")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                return self.wfile.write(data)
             return self._send(200, INDEX)
         if path == "/api/health":
             # A built page probes this. If it answers, the page is being
@@ -336,6 +491,17 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, json.dumps(
                 {"ok": True, "provider": CFG.get("llm", "anthropic")}),
                 "application/json")
+        if path == "/api/quota":
+            vid, _ = self._visitor()
+            return self._send(200, json.dumps(
+                LIMITS.remaining(vid) if LIMITS
+                else {"builds": None, "asks": None}), "application/json")
+        if path == "/api/stats":
+            # Owner-only: needs the passphrase even when the site is open.
+            if not CFG.get("password") or not self._authed():
+                return self._send(404, "{}", "application/json")
+            return self._send(200, json.dumps(
+                LIMITS.stats() if LIMITS else {}), "application/json")
         if path == "/api/library":
             return self._send(200, json.dumps(_library()), "application/json")
         if path.startswith("/api/status/"):
@@ -343,6 +509,29 @@ class Handler(BaseHTTPRequestHandler):
             if not job:
                 return self._send(404, "{}", "application/json")
             return self._send(200, json.dumps(job), "application/json")
+        if path.startswith("/api/paper/"):
+            aid = os.path.basename(path[11:])
+            meta = os.path.join(CFG["library"], f"{aid}.json")
+            page = os.path.join(CFG["library"], f"{aid}.html")
+            if not os.path.exists(page):
+                return self._send(404, '{"error":"not built"}', "application/json")
+            # The built page carries its scenes inline; hand them back as data
+            # so a client can lay them out itself instead of embedding ours.
+            with open(page, encoding="utf-8") as fh:
+                html = fh.read()
+            m = re.search(r"window\.__SCENES__ = (\[.*?\]);\n", html, re.S)
+            c = re.search(r"window\.__CONTEXT__ = (\{.*?\});\n", html, re.S)
+            out = {"arxiv_id": aid}
+            if os.path.exists(meta):
+                with open(meta) as fh:
+                    out.update(json.load(fh))
+            # The library metadata carries a scene COUNT under the same name,
+            # so the array has to be written after the merge or it is clobbered
+            # by an integer.
+            out["scene_count"] = out.get("scenes")
+            out["scenes"] = json.loads(m.group(1)) if m else []
+            out["context"] = json.loads(c.group(1)) if c else {}
+            return self._send(200, json.dumps(out), "application/json")
         if path.startswith("/p/"):
             aid = os.path.basename(path[3:])
             f = os.path.join(CFG["library"], f"{aid}.html")
@@ -353,7 +542,27 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(404, "<p>Not found.</p>")
 
     def do_POST(self):
+        if self.path == "/login":
+            n = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(n).decode()
+            pw = urllib.parse.parse_qs(body).get("pw", [""])[0]
+            if pw and pw == CFG.get("password"):
+                tok = hashlib.sha256(pw.encode()).hexdigest()[:32]
+                self.send_response(303)
+                self.send_header("Location", "/")
+                self.send_header("Set-Cookie",
+                                 f"p2v={tok}; Path=/; Max-Age=7776000; "
+                                 f"HttpOnly; SameSite=Lax")
+                self.end_headers()
+                return
+            return self._deny()
+        if not self._authed():
+            return self._deny()
         if self.path == "/api/ask":
+            vid, _ = self._visitor()
+            blocked = self._gate(vid, "ask")
+            if blocked:
+                return self._send(402, blocked, "application/json")
             n = int(self.headers.get("Content-Length", 0))
             try:
                 body = json.loads(self.rfile.read(n))
@@ -361,11 +570,22 @@ class Handler(BaseHTTPRequestHandler):
                     body["content"], body.get("system", ""),
                     provider=CFG.get("llm", "anthropic"),
                     model=CFG.get("model"), max_tokens=700)
+                if LIMITS:
+                    LIMITS.charge(vid, "ask")
                 return self._send(200, json.dumps({"text": answer}),
                                   "application/json")
             except Exception as e:
                 return self._send(200, json.dumps({"error": str(e)}),
                                   "application/json")
+        if self.path == "/api/waitlist":
+            n = int(self.headers.get("Content-Length", 0))
+            try:
+                body = json.loads(self.rfile.read(n))
+            except json.JSONDecodeError:
+                return self._send(400, '{"ok":false}', "application/json")
+            ok = LIMITS.join(body.get("email", ""),
+                             body.get("note", "")) if LIMITS else False
+            return self._send(200, json.dumps({"ok": ok}), "application/json")
         if self.path != "/api/build":
             return self._send(404, "{}", "application/json")
         n = int(self.headers.get("Content-Length", 0))
@@ -373,6 +593,12 @@ class Handler(BaseHTTPRequestHandler):
             paper = json.loads(self.rfile.read(n))["paper"]
         except (json.JSONDecodeError, KeyError):
             return self._send(400, '{"error":"bad request"}', "application/json")
+        vid, _ = self._visitor()
+        blocked = self._gate(vid, "build")
+        if blocked:
+            return self._send(402, blocked, "application/json")
+        if LIMITS:
+            LIMITS.charge(vid, "build")
         job_id = uuid.uuid4().hex[:12]
         JOBS[job_id] = {"state": "running", "log": [], "url": None}
         threading.Thread(target=_run_job, args=(job_id, paper),
@@ -380,9 +606,45 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(200, json.dumps({"job": job_id}), "application/json")
 
 
+def _load_seed() -> int:
+    """Copy committed pages into the library on startup.
+
+    A free-tier host has no persistent disk, so anything built at runtime is
+    gone on the next deploy. Pages you want present on arrival have to travel
+    with the image -- commit them to seed/ and they land here every boot.
+    Runtime builds still win: an existing file is never overwritten.
+    """
+    seed = CFG.get("seed") or "seed"
+    if not os.path.isdir(seed):
+        return 0
+    import shutil
+    n = 0
+    for name in os.listdir(seed):
+        if not name.endswith((".html", ".json")):
+            continue
+        dst = os.path.join(CFG["library"], name)
+        if not os.path.exists(dst):
+            shutil.copy2(os.path.join(seed, name), dst)
+            n += 1 if name.endswith(".html") else 0
+    return n
+
+
 def serve(host: str, port: int, cfg: dict) -> None:
+    global LIMITS
     CFG.update(cfg)
+    budget = float(os.environ.get("PAPER2VID_BUDGET_USD", 0) or 0)
+    if budget:
+        LIMITS = limits_mod.Limits(
+            os.path.join(CFG.get("library", "library"), "_limits.json"), budget)
+        st = LIMITS.stats()
+        print(f"  free tier: {limits_mod.FREE_BUILDS} build + "
+              f"{limits_mod.FREE_ASKS} question per visitor, "
+              f"${budget:.2f} cap (${st['spent']:.2f} spent, "
+              f"{st['waitlist']} on waitlist)", flush=True)
     os.makedirs(CFG["library"], exist_ok=True)
+    seeded = _load_seed()
+    if seeded:
+        print(f"  loaded {seeded} pages from seed/", flush=True)
     try:
         srv = ThreadingHTTPServer((host, port), Handler)
     except PermissionError:

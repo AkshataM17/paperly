@@ -37,7 +37,8 @@ def _scene_payload(sb, doc) -> list[dict]:
         v = dict(s.visual)
         kind = v.get("kind")
         item = {"id": s.id, "narration": s.narration, "kind": kind,
-                "eyebrow": v.get("eyebrow", "")}
+                "eyebrow": v.get("eyebrow", ""),
+                "prebaked": v.get("prebaked") or {}}
         if kind == "figure":
             fig = next((f for f in doc.figures if f.ref == v.get("ref")), None)
             if fig and fig.local and os.path.exists(fig.local):
@@ -270,17 +271,32 @@ function renderScene(sc) {
   s.appendChild(el('p', 'narration', sc.narration));
 
   const bar = el('div', 'ask');
-  const canned = [['Why does this matter?', 'Why does this part matter?'],
-   ['Explain simpler', 'Explain this part again, simpler, no jargon.'],
-   ['Go deeper', 'Explain the technical detail behind this part.']];
+  // These three were answered when the page was built. Serving the stored
+  // answer costs nothing and appears instantly; only free-text questions
+  // still need the model.
+  const canned = [
+   ['Why does this matter?', 'Why does this part matter?', 'matters'],
+   ['Explain simpler', 'Explain this part again, simpler, no jargon.', 'simpler'],
+   ['Go deeper', 'Explain the technical detail behind this part.', 'deeper']];
   if (sc.kind === 'figure')
     canned.splice(1, 0, ['Read this figure',
       'Walk me through this figure: what is on each axis, what each colour, '
-      + 'line style and marker represents, and what the reader should notice.']);
+      + 'line style and marker represents, and what the reader should notice.',
+      'figure']);
   canned
-    .forEach(([label, q]) => {
+    .forEach(([label, q, key]) => {
       const b = el('button', null, label);
-      b.onclick = () => askAbout(s, sc, q);
+      b.onclick = () => {
+        const ready = sc.prebaked && sc.prebaked[key];
+        if (ready) {
+          let a = s.querySelector('.answer');
+          if (!a) { a = el('div', 'answer'); s.appendChild(a); }
+          a.className = 'answer'; a.textContent = ready;
+          a.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+          return;
+        }
+        askAbout(s, sc, q);
+      };
       bar.appendChild(b);
     });
   const inp = el('input'); inp.placeholder = 'Ask anything about this part...';

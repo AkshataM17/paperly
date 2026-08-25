@@ -3,7 +3,7 @@
 .env.*
 !.env.example
 
-# generated output
+# generated output (seed/ is committed on purpose -- see DEPLOY.md)
 library/
 .paper2vid/
 tests/_out/

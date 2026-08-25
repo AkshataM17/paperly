@@ -41,8 +41,14 @@ def main(argv=None) -> int:
                    help="arXiv URL or id, e.g. 2401.12345. Omit with --serve.")
     p.add_argument("--serve", action="store_true",
                    help="open a local UI: paste a link in the browser instead")
-    p.add_argument("--port", type=int, default=8842,
-                   help="ports below 1024 need root; pick a high one")
+    p.add_argument("--host", default=None,
+                   help="bind address; use 0.0.0.0 to deploy. Defaults to "
+                        "localhost, or 0.0.0.0 when $PORT is set")
+    p.add_argument("--port", type=int, default=None,
+                   help="ports below 1024 need root; defaults to $PORT or 8842")
+    p.add_argument("--seed", default="seed",
+                   help="pages committed to the repo, copied into the library "
+                        "on startup so a fresh deploy is not empty")
     p.add_argument("--library", default="library",
                    help="where built pages are kept and listed")
     p.add_argument("-o", "--out", default=None, help="output mp4")
@@ -72,11 +78,22 @@ def main(argv=None) -> int:
     load_env(a.env)
 
     if a.serve:
-        return server.serve("127.0.0.1", a.port, {
+        # Hosts announce the port to bind through $PORT, and expect 0.0.0.0.
+        # Its presence is the signal that this is a deploy, not a laptop.
+        deployed = bool(os.environ.get("PORT"))
+        host = a.host or ("0.0.0.0" if deployed else "127.0.0.1")
+        port = a.port or int(os.environ.get("PORT", 8842))
+        pw = os.environ.get("PAPER2VID_PASSWORD")
+        cors = os.environ.get("PAPER2VID_CORS_ORIGIN")
+        if deployed and not pw:
+            log("WARNING: no PAPER2VID_PASSWORD set -- anyone who finds this "
+                "URL can spend your API credits")
+        return server.serve(host, port, {
             "workdir": a.workdir or ".paper2vid", "library": a.library,
             "llm": a.llm, "model": a.model, "minutes": a.minutes,
             "scenes": a.scenes, "no_place": a.no_place,
-            "place_model": a.place_model}) or 0
+            "place_model": a.place_model, "password": pw,
+            "seed": a.seed, "cors": cors}) or 0
     if not a.paper:
         p.error("give an arXiv link, or use --serve for the browser UI")
 
@@ -124,6 +141,11 @@ def main(argv=None) -> int:
                 model=a.place_model if a.llm == "anthropic" else a.model)
             if dropped:
                 log(f"dropped {dropped} markers that did not match the figures")
+        n = storyboard.prebake_answers(
+            sb, digest, log=log, provider=a.llm,
+            model=a.place_model if a.llm == "anthropic" else a.model)
+        if n:
+            log(f"pre-answered the buttons on {n} scenes (free from now on)")
         with open(sb_path, "w") as f:
             f.write(sb.to_json())
         log(f"wrote {sb_path} -- edit it and rerun to re-render for free")
