@@ -18,6 +18,7 @@ import json
 import os
 import re
 import threading
+import time
 import traceback
 import urllib.parse
 import uuid
@@ -33,17 +34,23 @@ LIMITS = None
 
 # --- the pipeline, as a background job ---------------------------------------
 
+JOB_TIMEOUT = 300
+
+
 def _run_job(job_id: str, paper: str) -> None:
     job = JOBS[job_id]
+    job["started"] = time.time()
 
     def log(msg: str) -> None:
         job["log"].append(msg)
+        job["at"] = time.time()
 
     def step(i: int) -> None:
         job["step"] = i
 
     try:
-        aid = ingest.parse_id(paper)
+        from . import sources
+        aid = sources.slug(paper)
         job["arxiv_id"] = aid
         work = os.path.join(CFG["workdir"], aid)
         os.makedirs(work, exist_ok=True)
@@ -87,7 +94,8 @@ def _run_job(job_id: str, paper: str) -> None:
             n = storyboard.prebake_answers(
                 sb, ingest.condense(doc), log=log, provider=CFG["llm"],
                 model=(CFG.get("place_model")
-                       if CFG["llm"] == "anthropic" else CFG["model"]))
+                       if CFG["llm"] == "anthropic" else CFG["model"])
+            ) if CFG.get("prebake") else 0
             if n:
                 log(f"pre-answered the buttons on {n} scenes")
             with open(sb_path, "w") as f:
@@ -104,10 +112,55 @@ def _run_job(job_id: str, paper: str) -> None:
         step(4)
         job.update(state="done", url=f"/p/{aid}")
         log("done")
+    except ingest.NoHTMLSource as e:
+        # Expected: the paper is not readable from any source. That is a
+        # sentence for the reader, not a stack trace for the console.
+        job["log"].append(str(e))
+        job.update(state="error", error=str(e))
     except Exception as e:
         job["log"].append(f"{type(e).__name__}: {e}")
-        job.update(state="error", error=str(e))
+        job.update(state="error",
+                   error="Something went wrong building this one. "
+                         "Try another paper, or try again in a minute.")
         traceback.print_exc()
+
+
+def _cache_path() -> str:
+    return os.path.join(CFG.get("library", "library"), "_answers.json")
+
+
+def _cache_get(key: str):
+    try:
+        with open(_cache_path()) as f:
+            return json.load(f).get(key)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _cache_put(key: str, val: str) -> None:
+    try:
+        d = {}
+        if os.path.exists(_cache_path()):
+            with open(_cache_path()) as f:
+                d = json.load(f)
+        d[key] = val
+        with open(_cache_path(), "w") as f:
+            json.dump(d, f)
+    except (OSError, json.JSONDecodeError):
+        pass
+
+
+def _log_question(paper: str, q: str) -> None:
+    """What readers actually ask is the most useful thing this collects."""
+    if not q:
+        return
+    try:
+        path = os.path.join(CFG.get("library", "library"), "_questions.jsonl")
+        with open(path, "a") as f:
+            f.write(json.dumps({"paper": paper, "q": q[:500],
+                                "at": int(time.time())}) + "\n")
+    except OSError:
+        pass
 
 
 def _library() -> list[dict]:
@@ -116,11 +169,18 @@ def _library() -> list[dict]:
         return []
     out = []
     for name in sorted(os.listdir(lib)):
-        if not name.endswith(".json"):
+        # The library also holds bookkeeping -- _limits.json, _answers.json --
+        # which is not a page. Reading those produced entries with no title
+        # and no id, which is where the "undefined" rows came from.
+        if not name.endswith(".json") or name.startswith("_"):
             continue
+        if not os.path.exists(os.path.join(lib, name[:-5] + ".html")):
+            continue                       # metadata with no page behind it
         try:
             with open(os.path.join(lib, name)) as f:
-                out.append(json.load(f))
+                d = json.load(f)
+            if d.get("arxiv_id") and d.get("title"):
+                out.append(d)
         except (OSError, json.JSONDecodeError):
             pass
     return out
@@ -204,15 +264,25 @@ h2{font-size:11px;font-family:%(mono)s;letter-spacing:.18em;text-transform:upper
 .lib .m{font-family:%(mono)s;font-size:11px;color:%(graphite)s;
         letter-spacing:.08em;margin-top:6px}
 .empty{color:%(graphite)s;font-size:15px;padding:20px 0}
-.wait{display:none;margin-top:34px;border:1px solid %(signal)s;background:#fff;
-      padding:26px 28px}
-.wait.on{display:block}
-.wait h3{font-size:22px;font-weight:640;letter-spacing:-.02em;margin:0 0 10px}
-.wait p{font-size:16px;color:%(graphite)s;line-height:1.55;margin:0 0 20px;
-        max-width:52ch}
-.wait form{display:flex;gap:9px;flex-wrap:wrap;margin:0}
-.wait .ok{font-family:%(mono)s;font-size:12px;letter-spacing:.1em;
+.veil{position:fixed;inset:0;background:rgba(26,29,35,.55);display:none;
+      align-items:center;justify-content:center;z-index:100;padding:24px}
+.veil.on{display:flex}
+.card{background:%(paper)s;max-width:470px;width:100%%;padding:36px 38px;
+      border-top:3px solid %(signal)s;
+      box-shadow:0 24px 60px rgba(26,29,35,.22)}
+.card h3{font-size:26px;font-weight:660;letter-spacing:-.022em;margin:0 0 12px}
+.card p{font-size:16px;color:%(graphite)s;line-height:1.58;margin:0 0 22px}
+.card form{display:flex;gap:8px;flex-wrap:wrap;margin:0}
+.card .alt{font-family:%(mono)s;font-size:11px;letter-spacing:.08em;
+           color:%(graphite)s;margin:18px 0 0}
+.card .alt a{color:%(signal)s;text-decoration:none}
+.card .ok{font-family:%(mono)s;font-size:12px;letter-spacing:.1em;
           text-transform:uppercase;color:%(signal)s}
+.card .x{position:absolute;top:0;right:0;font-family:%(mono)s;font-size:11px;
+         letter-spacing:.1em;color:%(graphite)s;cursor:pointer;
+         background:none;border:none;padding:8px 12px;text-transform:uppercase}
+.card .x:hover{color:%(ink)s;background:none}
+.cardwrap{position:relative;max-width:470px;width:100%%}
 </style></head><body><div class="nav"><div class="inner"><span class="mark">Paperly<b>.</b></span></div></div>
 
 <div class="wrap">
@@ -233,18 +303,22 @@ h2{font-size:11px;font-family:%(mono)s;letter-spacing:.18em;text-transform:upper
   <div class="steps" id="steps"></div>
 </div>
 
-<div class="wait" id="wait">
-  <h3 id="waith">That was your free paper.</h3>
-  <p id="waitp">Join the waitlist for unlimited access &mdash; or run it
-  yourself, it is open source and works on your own key.</p>
-  <form id="wf">
-    <input id="we" type="email" placeholder="you@university.edu" required>
-    <button type="submit">Join waitlist</button>
-  </form>
-</div>
-
 <h2 id="libh" hidden>Built already</h2>
 <div class="lib" id="lib"></div>
+<div class="veil" id="veil">
+  <div class="cardwrap">
+    <button class="x" id="vx">Close</button>
+    <div class="card">
+      <h3 id="waith">That was your free paper.</h3>
+      <p id="waitp">Join the waitlist for unlimited access.</p>
+      <form id="wf">
+        <input id="we" type="email" placeholder="you@university.edu" required>
+        <button type="submit">Join waitlist</button>
+      </form>
+    </div>
+  </div>
+</div>
+
 </div><script>
 const $ = s => document.querySelector(s);
 const STEPS = ['Fetching the paper', 'Reading figures and sections',
@@ -286,7 +360,9 @@ async function library() {
     a.href = '/p/' + it.arxiv_id;
     a.innerHTML = '<div class="t"></div><div class="m"></div>';
     a.querySelector('.t').textContent = it.title;
-    a.querySelector('.m').textContent = 'arXiv:' + it.arxiv_id;
+    a.querySelector('.m').textContent =
+      /^\d{4}\.\d{4,5}/.test(it.arxiv_id) ? 'arXiv:' + it.arxiv_id
+                                            : it.arxiv_id;
     lib.appendChild(a);
   });
 }
@@ -305,11 +381,19 @@ function stop(msg) {
   clearInterval(tick);
 }
 
-function showWaitlist(msg) {
+// An inline panel below the fold reads as nothing happening. The limit is
+// the one moment someone actually wants what is behind it, so it takes over
+// the screen.
+function showWaitlist(msg, heading) {
   if (msg) $('#waitp').textContent = msg;
-  $('#wait').className = 'wait on';
-  $('#wait').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  if (heading) $('#waith').textContent = heading;
+  $('#veil').className = 'veil on';
+  setTimeout(() => { try { $('#we').focus(); } catch (e) {} }, 60);
 }
+$('#vx').onclick = () => { $('#veil').className = 'veil'; };
+$('#veil').onclick = (e) => {
+  if (e.target === $('#veil')) $('#veil').className = 'veil';
+};
 
 $('#wf').onsubmit = async (e) => {
   e.preventDefault();
@@ -442,9 +526,8 @@ class Handler(BaseHTTPRequestHandler):
             "waitlist": True,
             "message": ("The free preview is out of capacity for now."
                         if why == "budget" else
-                        "That is your free " + kind + ". Join the waitlist for "
-                        "unlimited access, or run it yourself -- it is open "
-                        "source and works on your own key."),
+                        f"That was your free {kind}. Join the waitlist for "
+                        f"unlimited access."),
         })
 
     def _cors(self):
@@ -516,6 +599,15 @@ class Handler(BaseHTTPRequestHandler):
             job = JOBS.get(path.rsplit("/", 1)[1])
             if not job:
                 return self._send(404, "{}", "application/json")
+            # Nothing here can be cancelled mid-flight, but a job that has
+            # gone quiet for five minutes is not coming back, and leaving the
+            # page spinning is worse than saying so.
+            if (job.get("state") == "running"
+                    and time.time() - job.get("at", job.get("started", 0))
+                    > JOB_TIMEOUT):
+                job.update(state="error",
+                           error="This took too long and was stopped. "
+                                 "arXiv may be slow right now -- try again.")
             return self._send(200, json.dumps(job), "application/json")
         if path.startswith("/api/paper/"):
             aid = os.path.basename(path[11:])
@@ -567,6 +659,9 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authed():
             return self._deny()
         if self.path == "/api/ask":
+            # Canned buttons ask the identical question every time. Generating
+            # it once and keeping it means the second reader waits for nothing
+            # and pays for nothing -- while free-text questions still run live.
             vid, _ = self._visitor()
             blocked = self._gate(vid, "ask")
             if blocked:
@@ -574,12 +669,26 @@ class Handler(BaseHTTPRequestHandler):
             n = int(self.headers.get("Content-Length", 0))
             try:
                 body = json.loads(self.rfile.read(n))
+                ckey = body.get("cache")
+                if not ckey:
+                    blocked = self._gate(vid, "ask")
+                    if blocked:
+                        return self._send(402, blocked, "application/json")
+                if ckey:
+                    hit = _cache_get(ckey)
+                    if hit is not None:
+                        return self._send(200, json.dumps({"text": hit}),
+                                          "application/json")
                 answer = llm.complete(
                     body["content"], body.get("system", ""),
                     provider=CFG.get("llm", "anthropic"),
                     model=CFG.get("model"), max_tokens=700)
-                if LIMITS:
-                    LIMITS.charge(vid, "ask")
+                if ckey:
+                    _cache_put(ckey, answer)
+                else:
+                    _log_question(body.get("paper", ""), body.get("q", ""))
+                    if LIMITS:
+                        LIMITS.charge(vid, "ask")
                 return self._send(200, json.dumps({"text": answer}),
                                   "application/json")
             except Exception as e:

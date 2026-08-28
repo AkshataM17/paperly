@@ -110,11 +110,41 @@ button:disabled{opacity:.4;cursor:wait}
 input{font-family:%(display)s;font-size:15px;padding:10px 13px;
       border:1px solid %(rule)s;background:#fff;color:%(ink)s;flex:1;min-width:230px}
 input:focus{outline:none;border-color:%(signal)s}
+.answer b{font-weight:640;color:%(ink)s}
+.answer .mdh{display:block;font-size:15px;margin:14px 0 6px;color:%(ink)s}
+.answer .mdh:first-child{margin-top:0}
+.answer .mdli{display:block;padding-left:16px;text-indent:-10px;margin:3px 0}
+.answer .mdli::before{content:'\2013  ';color:%(signal)s}
+.answer code{font-family:%(mono)s;font-size:13px;background:#fff;
+             padding:1px 5px;border:1px solid %(rule)s}
 .answer{margin-top:18px;padding:19px 21px;background:%(wash)s;
         border-left:2px solid %(signal)s;font-size:16px;line-height:1.62;
-        white-space:pre-wrap}
+        }
 .answer.err{border-color:%(graphite)s;color:%(graphite)s}
 .answer.thinking{color:%(graphite)s;font-style:italic}
+.veil{position:fixed;inset:0;background:rgba(26,29,35,.55);display:none;
+      align-items:center;justify-content:center;z-index:100;padding:24px}
+.veil.on{display:flex}
+.cardwrap{position:relative;max-width:470px;width:100%%}
+.card{background:%(paper)s;padding:36px 38px;border-top:3px solid %(signal)s;
+      box-shadow:0 24px 60px rgba(26,29,35,.22)}
+.card h3{font-size:26px;font-weight:660;letter-spacing:-.022em;margin:0 0 12px}
+.card p{font-size:16px;color:%(graphite)s;line-height:1.58;margin:0 0 22px}
+.card form{display:flex;gap:8px;flex-wrap:wrap;margin:0}
+.card input{font-family:%(display)s;font-size:15px;padding:11px 14px;
+            border:1px solid %(rule)s;background:#fff;flex:1;min-width:200px}
+.card input:focus{outline:none;border-color:%(signal)s}
+.card form button{font-family:%(mono)s;font-size:11px;letter-spacing:.11em;
+                  text-transform:uppercase;background:%(ink)s;color:%(paper)s;
+                  border:1px solid %(ink)s;padding:11px 17px;cursor:pointer}
+.card form button:hover{background:%(signal)s;border-color:%(signal)s}
+.card .alt{font-family:%(mono)s;font-size:11px;letter-spacing:.08em;
+           margin:18px 0 0}
+.card .ok{font-family:%(mono)s;font-size:12px;letter-spacing:.1em;
+          text-transform:uppercase;color:%(signal)s}
+.card .x{position:absolute;top:0;right:0;font-family:%(mono)s;font-size:11px;
+         letter-spacing:.1em;color:%(graphite)s;cursor:pointer;background:none;
+         border:none;padding:8px 12px;text-transform:uppercase}
 .answer.thinking::after{content:'';display:inline-block;width:6px;height:6px;
   margin-left:7px;border-radius:50%%;background:%(signal)s;
   animation:p2vpulse 1.1s ease-in-out infinite}
@@ -136,6 +166,22 @@ const el = (t, c, x) => { const n = document.createElement(t);
   if (c) n.className = c; if (x != null) n.textContent = x; return n; };
 
 function key() { return localStorage.getItem('p2v_key') || ''; }
+
+// The model answers in markdown. Rendered as plain text it arrives as a wall
+// of asterisks and hashes, which reads worse than no formatting at all.
+// Escape first, then allow only the few marks that actually appear.
+function md(t) {
+  const esc = String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                       .replace(/>/g, '&gt;');
+  return esc
+    .replace(/^#{1,6}\s*(.+)$/gm, '<b class="mdh">$1</b>')
+    .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+    .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<i>$2</i>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/^[-\u2022]\s+(.+)$/gm, '<span class="mdli">$1</span>')
+    .replace(/\n{2,}/g, '<br><br>')
+    .replace(/\n/g, '<br>');
+}
 
 // A page built by `paper2vid --serve` is opened from that same server, which
 // already has a key in its environment -- asking the reader for one again is
@@ -174,7 +220,7 @@ async function prepImage(dataUri) {
   return { type: 'base64', media_type: 'image/jpeg', data: out.split(',')[1] };
 }
 
-async function ask(question, sc, into) {
+async function ask(question, sc, into, cacheKey) {
   const k = key();
   if (!RELAY && !k) { into.className = 'answer err';
     into.textContent = 'Add your API key at the top of the page first. It stays in this browser.';
@@ -210,10 +256,21 @@ async function ask(question, sc, into) {
     if (RELAY) {
       const r = await fetch('/api/ask', { method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ content, system: sys }) });
+        body: JSON.stringify({ content, system: sys,
+                               cache: cacheKey || null,
+                               paper: CTX.arxiv_id,
+                               q: cacheKey ? '' : question }) });
       const d = await r.json();
+      // Running out of free questions is not an error -- it is the product
+      // working. Say so, and offer the way forward, rather than showing a
+      // raw failure string.
+      if (r.status === 402 || d.reason) {
+        into.className = 'answer'; into.textContent = '';
+        showWaitlist(d.message || 'That was your free question.');
+        return;
+      }
       if (d.error) throw new Error(d.error);
-      into.className = 'answer'; into.textContent = d.text;
+      into.className = 'answer'; into.innerHTML = md(d.text);
       return;
     }
     const r = await fetch('https://api.anthropic.com/v1/messages', {
@@ -228,8 +285,8 @@ async function ask(question, sc, into) {
     if (!r.ok) throw new Error(r.status + ' ' + (await r.text()).slice(0, 200));
     const d = await r.json();
     into.className = 'answer';
-    into.textContent = d.content.filter(b => b.type === 'text')
-                                .map(b => b.text).join('');
+    into.innerHTML = md(d.content.filter(b => b.type === 'text')
+                                 .map(b => b.text).join(''));
   } catch (e) {
     into.className = 'answer err';
     into.textContent = 'Request failed: ' + e.message;
@@ -259,8 +316,10 @@ function renderScene(sc) {
       const h = el('div', 'hit');
       h.style.left = (a.x * 100) + '%'; h.style.top = (a.y * 100) + '%';
       h.appendChild(el('span', null, a.label));
-      h.onclick = () => askAbout(s, sc, 'What is happening at the point labelled "'
-        + a.label + '" on this figure?');
+      h.onclick = () => askAbout(s, sc,
+        'What is happening at the point labelled "' + a.label
+        + '" on this figure?',
+        CTX.arxiv_id + ':' + sc.id + ':mark:' + a.label);
       plate.appendChild(h);
     });
     s.appendChild(plate);
@@ -295,7 +354,7 @@ function renderScene(sc) {
           a.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
           return;
         }
-        askAbout(s, sc, q);
+        askAbout(s, sc, q, CTX.arxiv_id + ':' + sc.id + ':' + key);
       };
       bar.appendChild(b);
     });
@@ -307,11 +366,50 @@ function renderScene(sc) {
   return s;
 }
 
-function askAbout(section, sc, question) {
+function askAbout(section, sc, question, cacheKey) {
   let a = $('.answer', section);
   if (!a) { a = el('div', 'answer'); section.appendChild(a); }
   a.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-  ask(question, sc, a);
+  ask(question, sc, a, cacheKey);
+}
+
+// The limit is the one moment a reader actually wants more, so it takes over
+// the screen rather than sitting in the answer box.
+function showWaitlist(msg) {
+  let v = document.getElementById('p2v-veil');
+  if (!v) {
+    v = el('div'); v.id = 'p2v-veil'; v.className = 'veil';
+    v.innerHTML =
+      '<div class="cardwrap"><button class="x">Close</button>'
+      + '<div class="card"><h3>That was your free question.</h3>'
+      + '<p class="msg"></p>'
+      + '<form><input type="email" placeholder="you@university.edu" required>'
+      + '<button type="submit">Join waitlist</button></form>'
+      + '</div></div>';
+    document.body.appendChild(v);
+    v.querySelector('.x').onclick = () => { v.className = 'veil'; };
+    v.onclick = (e) => { if (e.target === v) v.className = 'veil'; };
+    v.querySelector('form').onsubmit = async (e) => {
+      e.preventDefault();
+      const inp = v.querySelector('input');
+      if (!inp.value.trim()) return;
+      const f = v.querySelector('form');
+      try {
+        const w = await fetch('/api/waitlist', { method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ email: inp.value.trim() }) });
+        const wd = await w.json();
+        f.innerHTML = wd.ok
+          ? '<span class="ok">You are on the list. Thank you.</span>'
+          : '<span class="ok">That address did not look right.</span>';
+      } catch (err) {
+        f.innerHTML = '<span class="ok">Could not reach the server.</span>';
+      }
+    };
+  }
+  v.querySelector('.msg').textContent = msg;
+  v.className = 'veil on';
+  setTimeout(() => { try { v.querySelector('input').focus(); } catch (e) {} }, 60);
 }
 
 const wrap = $('.wrap');

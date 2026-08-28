@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, asdict
@@ -26,6 +27,26 @@ import requests
 from bs4 import BeautifulSoup
 
 UA = {"User-Agent": "paper2vid (+https://github.com/)"}
+RETRIES = 1
+BACKOFF = 0.0
+
+
+def _get(session, url, **kw):
+    """GET with retries.
+
+    arXiv's endpoints are frequently slow and occasionally just time out.
+    One transient failure should not end a build, so this backs off and tries
+    again before giving up.
+    """
+    last = None
+    for attempt in range(RETRIES):
+        try:
+            return session.get(url, headers=UA, timeout=20, **kw)
+        except requests.RequestException as e:
+            last = e
+            if attempt < RETRIES - 1:
+                time.sleep(BACKOFF * (attempt + 1))
+    raise last
 ARXIV_ID = re.compile(r"(\d{4}\.\d{4,5})(v\d+)?")
 
 
@@ -125,7 +146,8 @@ def _text(node) -> str:
     return _clean(n.get_text())
 
 
-FIG_PREFIX = re.compile(r"^Figure\s+\d+[:.]\s*")
+FIG_PREFIX = re.compile(
+    r"^(?:Figure|Fig\.?)\s*\d+\s*[:.\-\u2013\u2014]?\s*", re.I)
 
 
 def fetch_html(arxiv_id: str, session=None) -> tuple[str, str]:
@@ -135,9 +157,9 @@ def fetch_html(arxiv_id: str, session=None) -> tuple[str, str]:
     for url in (f"https://arxiv.org/html/{arxiv_id}",
                 f"https://ar5iv.labs.arxiv.org/html/{arxiv_id}"):
         try:
-            r = s.get(url, headers=UA, timeout=30, allow_redirects=True)
+            r = _get(s, url, allow_redirects=True)
         except requests.RequestException as e:
-            tried.append(f"{url}: {type(e).__name__}")
+            tried.append(f"{url}: {type(e).__name__} after {RETRIES} tries")
             continue
         if r.status_code == 200 and "ltx_document" in r.text:
             return r.text, r.url
@@ -168,8 +190,7 @@ def fetch_meta(arxiv_id: str, session=None) -> Doc:
     """
     s = session or requests.Session()
     try:
-        r = s.get(ARXIV_API, params={"id_list": arxiv_id}, headers=UA,
-                  timeout=30)
+        r = _get(s, ARXIV_API, params={"id_list": arxiv_id})
         r.raise_for_status()
     except requests.RequestException as e:
         raise NoHTMLSource(
@@ -251,7 +272,7 @@ def download_figures(doc: Doc, outdir: str, session=None) -> None:
             f.local = path
             return
         try:
-            r = requests.get(f.src, headers=UA, timeout=30)
+            r = _get(requests, f.src)
             if r.status_code == 200 and r.content:
                 with open(path, "wb") as fh:
                     fh.write(r.content)
@@ -266,7 +287,35 @@ def download_figures(doc: Doc, outdir: str, session=None) -> None:
 
 
 def load(url_or_id: str, workdir: str, log=None, allow_abstract_only=True) -> Doc:
+    """arXiv, bioRxiv, medRxiv or PMC -- resolved by paper2vid.sources."""
+    from . import sources
+    if sources.detect(url_or_id) != "arxiv":
+        try:
+            doc = sources.fetch(url_or_id, log=log)
+        except sources.RateLimited:
+            raise
+        except NoHTMLSource as e:
+            if not allow_abstract_only:
+                raise
+            if log:
+                log(str(e))
+                log("falling back to the abstract - the page will be short")
+            return sources.fetch_abstract_only(url_or_id)
+        found = len(doc.figures)
+        if log and found:
+            log(f"downloading {found} figures")
+        download_figures(doc, os.path.join(workdir, "figures"))
+        doc.figures = [f for f in doc.figures if f.local]
+        for i, f in enumerate(doc.figures, 1):
+            f.ref = f"F{i}"
+        if log and found != len(doc.figures):
+            log(f"{found - len(doc.figures)} of {found} figures failed to "
+                f"download and were skipped")
+        return doc
+
     aid = parse_id(url_or_id)
+    if log:
+        log(f"fetching arxiv:{aid}")
     try:
         html, base = fetch_html(aid)
     except NoHTMLSource as e:
@@ -278,6 +327,10 @@ def load(url_or_id: str, workdir: str, log=None, allow_abstract_only=True) -> Do
         return fetch_meta(aid)
     doc = parse(html, base.rsplit("/", 1)[0], aid)
     found = len(doc.figures)
+    # Figure downloads are the slow part of ingest and, without a word here,
+    # a paper with a dozen large figures is indistinguishable from a hang.
+    if log and found:
+        log(f"downloading {found} figures")
     download_figures(doc, os.path.join(workdir, "figures"))
     doc.figures = [f for f in doc.figures if f.local]
     # "0 figures" is ambiguous on its own -- a paper with none and a paper

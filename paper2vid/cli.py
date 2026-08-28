@@ -98,7 +98,8 @@ def main(argv=None) -> int:
         p.error("give an arXiv link, or use --serve for the browser UI")
 
     t0 = time.time()
-    aid = ingest.parse_id(a.paper)
+    from . import sources
+    aid = sources.slug(a.paper)
     work = a.workdir or os.path.join(".paper2vid", aid)
     os.makedirs(work, exist_ok=True)
     out = a.out or f"{aid}.mp4"

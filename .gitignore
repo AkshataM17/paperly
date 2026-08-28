@@ -22,3 +22,9 @@ dist/
 .vscode/
 .idea/
 .DS_Store
+
+# build output written to the repo root by the CLI
+/*.html
+
+# runtime state, never commit -- contains visitor ids and emails
+seed/_*.json
