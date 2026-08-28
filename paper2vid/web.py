@@ -121,6 +121,16 @@ input:focus{outline:none;border-color:%(signal)s}
         border-left:2px solid %(signal)s;font-size:16px;line-height:1.62;
         }
 .answer.err{border-color:%(graphite)s;color:%(graphite)s}
+.qa{margin-top:16px}
+.qa-q{font-family:%(mono)s;font-size:11px;letter-spacing:.09em;
+      text-transform:uppercase;color:%(graphite)s;margin-bottom:7px}
+.qa .answer{margin-top:0}
+.clearbar{max-width:860px;margin:0 auto;padding:0 28px 40px;display:none}
+.clearbar.on{display:block}
+.clearbar button{font-family:%(mono)s;font-size:11px;letter-spacing:.1em;
+                 text-transform:uppercase;background:none;color:%(graphite)s;
+                 border:1px solid %(rule)s;padding:8px 14px;cursor:pointer}
+.clearbar button:hover{color:%(signal)s;border-color:%(signal)s}
 .answer.thinking{color:%(graphite)s;font-style:italic}
 .veil{position:fixed;inset:0;background:rgba(26,29,35,.55);display:none;
       align-items:center;justify-content:center;z-index:100;padding:24px}
@@ -166,6 +176,30 @@ const el = (t, c, x) => { const n = document.createElement(t);
   if (c) n.className = c; if (x != null) n.textContent = x; return n; };
 
 function key() { return localStorage.getItem('p2v_key') || ''; }
+
+// A reader who comes back to a paper should find what they already asked.
+// Kept in their own browser, keyed by paper: no account, no server, and
+// nothing about their reading leaves the machine.
+const HKEY = 'p2v_hist:' + (CTX.arxiv_id || 'x');
+
+function history() {
+  try { return JSON.parse(localStorage.getItem(HKEY) || '{}'); }
+  catch (e) { return {}; }
+}
+
+function remember(sceneId, question, answer) {
+  try {
+    const h = history();
+    (h[sceneId] = h[sceneId] || []).push({ q: question, a: answer });
+    if (h[sceneId].length > 12) h[sceneId].shift();
+    localStorage.setItem(HKEY, JSON.stringify(h));
+  } catch (e) { /* private mode, or the quota is full -- not worth failing */ }
+}
+
+function forget() {
+  try { localStorage.removeItem(HKEY); } catch (e) {}
+  document.querySelectorAll('.qa').forEach(n => n.remove());
+}
 
 // The model answers in markdown. Rendered as plain text it arrives as a wall
 // of asterisks and hashes, which reads worse than no formatting at all.
@@ -271,6 +305,7 @@ async function ask(question, sc, into, cacheKey) {
       }
       if (d.error) throw new Error(d.error);
       into.className = 'answer'; into.innerHTML = md(d.text);
+      remember(sc.id, question, d.text);
       return;
     }
     const r = await fetch('https://api.anthropic.com/v1/messages', {
@@ -285,12 +320,23 @@ async function ask(question, sc, into, cacheKey) {
     if (!r.ok) throw new Error(r.status + ' ' + (await r.text()).slice(0, 200));
     const d = await r.json();
     into.className = 'answer';
-    into.innerHTML = md(d.content.filter(b => b.type === 'text')
-                                 .map(b => b.text).join(''));
+    const txt = d.content.filter(b => b.type === 'text')
+                         .map(b => b.text).join('');
+    into.innerHTML = md(txt);
+    remember(sc.id, question, txt);
   } catch (e) {
     into.className = 'answer err';
     into.textContent = 'Request failed: ' + e.message;
   }
+}
+
+function qaBlock(q, a) {
+  const w = el('div', 'qa');
+  w.appendChild(el('div', 'qa-q', q));
+  const ans = el('div', 'answer');
+  ans.innerHTML = md(a);
+  w.appendChild(ans);
+  return w;
 }
 
 function renderScene(sc) {
@@ -363,6 +409,7 @@ function renderScene(sc) {
     askAbout(s, sc, inp.value.trim()); inp.value = ''; } };
   bar.appendChild(inp);
   s.appendChild(bar);
+  (history()[sc.id] || []).forEach(x => s.appendChild(qaBlock(x.q, x.a)));
   return s;
 }
 
@@ -414,6 +461,14 @@ function showWaitlist(msg) {
 
 const wrap = $('.wrap');
 S.forEach(sc => wrap.appendChild(renderScene(sc)));
+
+if (Object.keys(history()).length) {
+  const bar = el('div', 'clearbar on');
+  const b = el('button', null, 'Clear my questions on this paper');
+  b.onclick = () => { forget(); bar.remove(); };
+  bar.appendChild(b);
+  wrap.parentNode.insertBefore(bar, wrap.nextSibling);
+}
 
 // Reveal groups carry a 0-1 fraction from the storyboard. Map it onto a
 // stagger so a scene assembles in the order its narration explains it.
