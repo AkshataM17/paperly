@@ -21,8 +21,8 @@ import time
 import uuid
 
 # What one visitor gets before the waitlist appears.
-FREE_BUILDS = 1
-FREE_ASKS = 1
+FREE_BUILDS = 2
+FREE_ASKS = 5
 
 # Rough per-call cost, used only to decide when to stop. Measured against
 # Sonnet for the storyboard and Haiku for markers and pre-baked answers; adjust
