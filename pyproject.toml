@@ -1,7 +1,7 @@
 [project]
 name = "paper2vid"
 version = "0.1.0"
-description = "Paste an arXiv link, get a narrated video. Bring your own key."
+description = "Paste a paper link, get it explained."
 requires-python = ">=3.10"
 dependencies = [
   "requests>=2.31",
@@ -16,6 +16,12 @@ local-tts = ["kokoro-onnx>=0.4", "soundfile>=0.12"]
 
 [project.scripts]
 paper2vid = "paper2vid.cli:main"
+
+# Without this, setuptools tries to guess which top-level directory is the
+# package. In the container that guess fails, because seed/ and tests/ sit
+# alongside paper2vid/ and it refuses to choose. Naming it ends the guessing.
+[tool.setuptools]
+packages = ["paper2vid"]
 
 [build-system]
 requires = ["setuptools>=68"]
