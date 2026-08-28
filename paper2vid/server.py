@@ -283,7 +283,9 @@ h2{font-size:11px;font-family:%(mono)s;letter-spacing:.18em;text-transform:upper
          background:none;border:none;padding:8px 12px;text-transform:uppercase}
 .card .x:hover{color:%(ink)s;background:none}
 .cardwrap{position:relative;max-width:470px;width:100%%}
-</style></head><body><div class="nav"><div class="inner"><span class="mark">Paperly<b>.</b></span></div></div>
+</style>
+<script defer src="https://cloud.umami.is/script.js" data-website-id="4884e3d4-8e76-49f5-82a6-c84c52d6d17e"></script>
+</head><body><div class="nav"><div class="inner"><span class="mark">Paperly<b>.</b></span></div></div>
 
 <div class="wrap">
 <h1>Paste a paper.</h1>

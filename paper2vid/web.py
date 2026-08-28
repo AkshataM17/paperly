@@ -504,7 +504,9 @@ def build(sb, doc, digest: str, out_path: str) -> str:
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{scene_mod.escape(sb.title)}</title>
-<style>{CSS}</style></head><body>
+<style>{CSS}</style>
+<script defer src="https://cloud.umami.is/script.js" data-website-id="4884e3d4-8e76-49f5-82a6-c84c52d6d17e"></script>
+</head><body>
 <div class="wrap">
   <div class="keybar" id="kb" hidden>
     <input id="k" type="password" placeholder="Anthropic API key (stays in this browser)">
