@@ -21,8 +21,8 @@ import time
 import uuid
 
 # What one visitor gets before the waitlist appears.
-FREE_BUILDS = 2
-FREE_ASKS = 5
+FREE_BUILDS = 1
+FREE_ASKS = 1
 
 # Rough per-call cost, used only to decide when to stop. Measured against
 # Sonnet for the storyboard and Haiku for markers and pre-baked answers; adjust
@@ -104,6 +104,31 @@ class Limits:
 
     # --- waitlist --------------------------------------------------------
 
+    def _forward(self, email: str, note: str) -> None:
+        """Copy the signup somewhere that survives a redeploy.
+
+        The local file is the source of truth, but a free-tier host wipes it
+        on every deploy -- and losing the waitlist defeats the point of
+        collecting it. Google Forms accepts a plain POST and gives a Sheet
+        that persists. Fire-and-forget: a slow Google must not make the
+        visitor wait, and a failed forward must not lose the local record.
+        """
+        form = os.environ.get("PAPER2VID_FORM_ID")
+        field = os.environ.get("PAPER2VID_FORM_FIELD")
+        if not (form and field):
+            return
+
+        def go():
+            try:
+                import requests
+                requests.post(
+                    f"https://docs.google.com/forms/d/e/{form}/formResponse",
+                    data={field: email}, timeout=10)
+            except Exception:
+                pass                      # the local copy is already written
+
+        threading.Thread(target=go, daemon=True).start()
+
     def join(self, email: str, note: str = "") -> bool:
         email = (email or "").strip()[:200]
         if "@" not in email or len(email) < 5:
@@ -114,6 +139,7 @@ class Limits:
             self.state["waitlist"].append(
                 {"email": email, "note": note[:300], "at": int(time.time())})
             self._save()
+        self._forward(email, note)
         return True
 
     def stats(self) -> dict:
