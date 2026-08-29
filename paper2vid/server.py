@@ -228,6 +228,13 @@ button{font-family:%(mono)s;font-size:12px;letter-spacing:.14em;
 button:hover{background:%(signal)s;border-color:%(signal)s}
 button:disabled{opacity:.4;cursor:wait}
 .note{font-family:%(mono)s;font-size:11px;color:%(graphite)s;letter-spacing:.06em}
+.joinline{font-family:%(mono)s;font-size:11px;letter-spacing:.09em;
+          color:%(graphite)s;margin:14px 0 0}
+.joinline button{font-family:inherit;font-size:inherit;letter-spacing:inherit;
+                 background:none;border:none;border-bottom:1px solid %(signal)s;
+                 color:%(signal)s;padding:0 0 1px;cursor:pointer;
+                 text-transform:none}
+.joinline button:hover{background:none;color:%(ink)s;border-color:%(ink)s}
 
 /* progress: named stages, so waiting has shape */
 .run{display:none;margin-top:34px;border:1px solid %(rule)s;background:#fff}
@@ -296,6 +303,10 @@ h2{font-size:11px;font-family:%(mono)s;letter-spacing:.18em;text-transform:upper
          autocomplete="off" spellcheck="false">
   <button id="go" type="submit">Build</button>
 </form>
+
+<p class="joinline">Two papers free &middot;
+  <button id="joinnow" type="button">join the waitlist</button>
+  for unlimited access</p>
 
 <div class="run" id="run">
   <div class="runhead">
@@ -396,6 +407,12 @@ $('#vx').onclick = () => { $('#veil').className = 'veil'; };
 $('#veil').onclick = (e) => {
   if (e.target === $('#veil')) $('#veil').className = 'veil';
 };
+
+// Not everyone reaches the limit. Someone who reads the page and decides
+// they want this should not have to spend a paper to say so.
+$('#joinnow').onclick = () => showWaitlist(
+  'Unlimited papers and questions, as soon as it is ready.',
+  'Join the waitlist');
 
 $('#wf').onsubmit = async (e) => {
   e.preventDefault();
