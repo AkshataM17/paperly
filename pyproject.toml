@@ -13,6 +13,9 @@ dependencies = [
 
 [project.optional-dependencies]
 local-tts = ["kokoro-onnx>=0.4", "soundfile>=0.12"]
+# one call signature across providers; optional, the built-in
+# adapters work without it
+litellm = ["litellm>=1.40"]
 
 [project.scripts]
 paper2vid = "paper2vid.cli:main"

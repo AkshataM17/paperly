@@ -66,6 +66,9 @@ def main(argv=None) -> int:
     p.add_argument("--place-model", default="claude-haiku-4-5-20251001",
                    help="model for the marker-checking pass; it is a narrow "
                         "look-and-report task, so a small fast model fits")
+    p.add_argument("--prebake", action="store_true",
+                   help="answer the canned buttons at build time instead of "
+                        "when a reader clicks. Off by default.")
     p.add_argument("--no-place", action="store_true",
                    help="skip the vision pass that checks marker placement")
     p.add_argument("--format", default="web", choices=["web", "video", "both"],
@@ -142,11 +145,15 @@ def main(argv=None) -> int:
                 model=a.place_model if a.llm == "anthropic" else a.model)
             if dropped:
                 log(f"dropped {dropped} markers that did not match the figures")
-        n = storyboard.prebake_answers(
-            sb, digest, log=log, provider=a.llm,
-            model=a.place_model if a.llm == "anthropic" else a.model)
-        if n:
-            log(f"pre-answered the buttons on {n} scenes (free from now on)")
+        # Off by default: an answer written before anyone asks reads worse
+        # than one written for the person asking. The server-side cache keeps
+        # each answer after its first use, which gets the saving anyway.
+        if a.prebake:
+            n = storyboard.prebake_answers(
+                sb, digest, log=log, provider=a.llm,
+                model=a.place_model if a.llm == "anthropic" else a.model)
+            if n:
+                log(f"pre-answered the buttons on {n} scenes")
         with open(sb_path, "w") as f:
             f.write(sb.to_json())
         log(f"wrote {sb_path} -- edit it and rerun to re-render for free")

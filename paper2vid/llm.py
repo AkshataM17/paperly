@@ -63,6 +63,42 @@ def _openai_compatible(prompt, system, model, max_tokens, base, key_var):
     return r.json()["choices"][0]["message"]["content"]
 
 
+def _litellm(prompt, system: str, model: str, max_tokens: int) -> str:
+    """One call signature across every provider.
+
+    The hand-rolled adapters each know one vendor's request shape. Fine for
+    four providers, tiresome for forty. LiteLLM normalises the lot -- and it
+    translates the vision content blocks the marker-checking pass sends.
+    """
+    try:
+        import litellm
+    except ImportError:
+        raise LLMError("pip install litellm to use --llm litellm")
+    msgs = []
+    if system:
+        msgs.append({"role": "system", "content": system})
+    msgs.append({"role": "user", "content": prompt})
+    try:
+        r = litellm.completion(model=model, messages=msgs,
+                               max_tokens=max_tokens)
+    except Exception as e:
+        raise LLMError(f"litellm ({model}): {e}")
+    return r.choices[0].message.content or ""
+
+
+def _vllm(prompt, system: str, model: str, max_tokens: int) -> str:
+    """A locally served open model. vLLM speaks the OpenAI API, so the
+    existing adapter does the work; this exists for the default host and a
+    clearer error when nothing is listening."""
+    base = os.environ.get("VLLM_HOST", "http://localhost:8000") + "/v1"
+    try:
+        return _openai_compatible(prompt, system, model, max_tokens, base, None)
+    except requests.RequestException as e:
+        raise LLMError(
+            f"no vLLM server at {base} ({type(e).__name__}). Start one with: "
+            f"vllm serve {model}")
+
+
 PROVIDERS = {
     "anthropic": (_anthropic, "claude-sonnet-4-6"),
     "openai": (lambda p, s, m, t: _openai_compatible(
@@ -70,6 +106,10 @@ PROVIDERS = {
     "openrouter": (lambda p, s, m, t: _openai_compatible(
         p, s, m, t, "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
         "anthropic/claude-sonnet-4.5"),
+    # model strings like "anthropic/claude-sonnet-4-6" or "gemini/gemini-2.0-flash"
+    "litellm": (_litellm, "anthropic/claude-sonnet-4-6"),
+    # an open model you serve yourself
+    "vllm": (_vllm, "Qwen/Qwen2.5-7B-Instruct"),
     # local, free, no key
     "ollama": (lambda p, s, m, t: _openai_compatible(
         p, s, m, t, os.environ.get("OLLAMA_HOST", "http://localhost:11434") + "/v1",
