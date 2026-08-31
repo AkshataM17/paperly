@@ -125,6 +125,27 @@ Rewrite narration, drop a scene, move a marker. Tokens are spent once.
 | `--dry-run` | | storyboard only |
 | `--tts` | `kokoro` | video only: `openai`, `elevenlabs`, `none` |
 
+## Use it from an assistant
+
+Paperly is also an MCP server, so anything speaking that protocol can build
+and read papers directly:
+
+```bash
+pip install 'paper2vid[mcp]'
+```
+
+In Claude Desktop's config:
+
+```json
+{"mcpServers": {"paperly": {"command": "paperly-mcp"}}}
+```
+
+Three tools: `build_paper(url)` builds a page and returns its outline,
+`get_paper(id)` reads a built one back as structured scenes with annotation
+coordinates, and `list_papers()` lists the library. Asking an assistant to
+explain a paper then produces a real annotated page rather than a summary
+written from the abstract.
+
 ## Known gaps
 
 - **Tables are thrown away.** `ingest.py` doesn't extract `table.ltx_tabular`,
