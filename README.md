@@ -1,4 +1,4 @@
-# paper2vid
+# paperly
 
 Paste an arXiv link. Get the paper's own figures, marked up, with somewhere to
 ask what the caption assumed you already knew.
